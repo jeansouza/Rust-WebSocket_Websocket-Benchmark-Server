@@ -6,9 +6,12 @@ edition = "2018"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
-[dependencies.websocket]
-git = "https://github.com/websockets-rs/rust-websocket.git"
-
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+tungstenite = "0.21.0"
+tokio = { version = "1.36.0", features = ["full"] } # for our async runtime    
+tokio-tungstenite = "0.21.0"
+futures-util = "0.3.28"
+futures-channel = "0.3.30"
+fastwebsockets = "0.6.0"

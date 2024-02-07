@@ -1,18 +1,17 @@
-extern crate websocket;
-
+use std::{net::{TcpListener, TcpStream}, thread::spawn};
+use tungstenite::{
+    accept_hdr,
+    handshake::server::{Request, Response}, WebSocket,
+};
 use std::str;
-use std::thread;
-use websocket::sync::Server;
-use websocket::message::{OwnedMessage};
 use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Serialize, Deserialize};
 use serde_json::json;
 
 #[derive(Serialize, Deserialize, Debug)]
-struct Request {
+struct WsRequest {
     c: i32,
 }
-
 
 ///
 /// Gets the current unix timestamp of the server
@@ -28,12 +27,7 @@ fn get_timestamp() -> i64{
 
 }
 
-///
-/// Creates a JSON string containing the message count and the current timestamp
-/// Param - c - i32 - The message count
-/// Returns - OwnedMessage object - an OwnedMessage object holding a JSON string containing the message count and the current timestamp
-///
-fn get_event(c: i32) -> OwnedMessage {
+fn get_event(c: i32) -> String {
 
     //create an event array for the time that message "c" is received by the server
     let event = json!({
@@ -44,73 +38,48 @@ fn get_event(c: i32) -> OwnedMessage {
     // convert the json to a string
     let event_string = event.to_string();
 
-    // return OwnedMessage Text object, with the event string as it's payload
-    return OwnedMessage::Text(event_string);
+    event_string
 }
 
-///
-/// Send a connected client an event JSON string
-/// Param ws - websocket::sender::Writer The client connection the outgoing message is for
-/// Param - c - i32 - The message count
-/// Returns - websocket::sender::Writer - The client connection the outgoing message is for ( needs
-///                                       to be returned back to the serve function )
-///
-fn notify(mut ws: websocket::sender::Writer<std::net::TcpStream>, c: i32 ) -> websocket::sender::Writer<std::net::TcpStream> {
+fn notify(mut websocket: WebSocket<TcpStream>, c: i32 ) -> WebSocket<TcpStream> {
     let message = get_event(c);
 
     //send the given connection the event timestamp for message "c"
-    ws.send_message(&message).unwrap();
-    return ws
+    websocket.send(tungstenite::protocol::Message::Text(message)).unwrap();
+
+    websocket
 }
 
-///
-/// Starts the websocket server listening on the given address and port
-/// handles any incoming requests to the server
-///
 fn main() {
-    let server = Server::bind("0.0.0.0:8080").unwrap();
-    println!("Running");
+    let server = TcpListener::bind("127.0.0.1:8080").unwrap();
+    for stream in server.incoming() {
+        spawn(move || {
+            let callback = |_: &Request, response: Response| { Ok(response) };
+            let mut websocket = accept_hdr(stream.unwrap(), callback).unwrap();
 
-    for request in server.filter_map(Result::ok) {
+            websocket = notify(websocket, 0);
 
-        // Called once per incoming connection
-        // Handles events like when a new client connects
-        // and when the server receives a message from the client.
-        // Spawn a new thread for each connection.
-        thread::spawn(|| {
-
-            // get the client of the incoming connection
-            let client = request.accept().unwrap();
-            let ip = client.peer_addr().unwrap();
-            let (mut receiver, mut sender) = client.split().unwrap();
-
-            println!("Connection from {}", ip);
-
-            // send newly connected client initial timestamp
-            sender = notify(sender, 0);
-
-            //continuously listen for incoming messages
-            for message in receiver.incoming_messages() {
-                let message = message.unwrap();
-
-
-                match message {
-                    // process any incoming Text messages
-                    OwnedMessage::Text(message_text) => {
-
-                        // decode incoming message into a struct
-                        let request: Request = serde_json::from_str(&message_text).unwrap();
-
-                        // notify client with event for message with count "c"
-                        sender = notify(sender, request.c)
-                    }
-                    //ignore all other kinds of message ( Ping, Close, etc )
-                    _ => {
-                        continue;
+            loop {
+                let msg = websocket.read().unwrap();
+                if msg.is_binary() || msg.is_text() {
+                    
+                    match msg {
+                        // process any incoming Text messages
+                        tungstenite::protocol::Message::Text(message_text) => {
+    
+                            // decode incoming message into a struct
+                            let request: WsRequest = serde_json::from_str(&message_text).unwrap();
+    
+                            // notify client with event for message with count "c"
+                            websocket = notify(websocket, request.c)
+                        }
+                        //ignore all other kinds of message ( Ping, Close, etc )
+                        _ => {
+                            continue;
+                        }
                     }
                 }
             }
         });
     }
-
 }
